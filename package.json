@@ -1,0 +1,16 @@
+{
+  "name": "memhub",
+  "version": "1.0.0",
+  "description": "Cross-model memory and knowledge-graph hub for AI coding agents. Local web UI + MCP server, zero dependencies.",
+  "private": true,
+  "type": "commonjs",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server/src/index.js",
+    "mcp": "node server/src/mcp.js",
+    "test": "node test.js"
+  },
+  "bin": {
+    "memhub": "client/memhub.ps1"
+  }
+}

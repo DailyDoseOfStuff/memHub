@@ -1,0 +1,52 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>memHub</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/>
+        <path d="M8.5 7.5 11 15.5M15.5 7.5 13 15.5M9 6h6"/>
+      </svg>
+      <span>memHub</span>
+      <span id="conn-dot" class="dot off" title="checking..."></span>
+    </div>
+    <div class="search-wrap">
+      <input id="search-input" type="text" placeholder="Search nodes... ( / )" autocomplete="off" spellcheck="false" />
+      <div id="search-results" class="dropdown hidden"></div>
+    </div>
+    <div id="type-filters" class="filters"></div>
+    <div class="actions">
+      <button id="add-node-btn" class="btn primary" title="Create node">+ Node</button>
+      <button id="backup-btn" class="btn" title="Write full backup to server/data/">Backup</button>
+      <button id="stats-btn" class="btn" title="Graph statistics">Stats</button>
+      <button id="log-btn" class="btn" title="Recent activity log">Log</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <div id="graph-pane">
+      <svg id="graph-svg"><g id="graph-viewport"></g></svg>
+      <div id="graph-legend" class="legend"></div>
+      <div id="graph-empty" class="empty hidden">Empty graph â€” connect your first model agent via MCP, or add a node.</div>
+      <div id="recents" class="hidden"></div>
+      <button id="sidebar-toggle" class="btn subtle" title="Pin panel open">&#9776;</button>
+    </div>
+    <aside id="sidebar">
+      <button id="sidebar-close" class="btn subtle" title="Close panel">&#10005;</button>
+      <div id="sidebar-body"></div>
+    </aside>
+  </main>
+
+  <div id="modal-overlay" class="modal-overlay hidden"></div>
+  <div id="toasts"></div>
+
+  <script src="/graph.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
