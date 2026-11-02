@@ -13,7 +13,7 @@ const PORT = 4788;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'memhub-test-'));
 const STORE = path.join(DATA, 'store.json');
-const ENV = { ...process.env, MEMHUB_PORT: String(PORT), MEMHUB_DATA: DATA };
+const ENV = { ...process.env, MEMHUB_PORT: String(PORT), MEMHUB_DATA: DATA, MEMHUB_NO_EMBED: '1' };
 const MB = JSON.parse(JSON.stringify(ENV));
 
 let server = null;
@@ -183,7 +183,28 @@ async function main() {
     assert.equal(json.results.length >= 1, true);
     const top = json.results[0];
     assert.equal(top.label, 'search things');
-    assert.equal(top.score, 80);
+    assert.equal(top.score, 80 + 10); // prefix match (80) + fresh recency bump (10)
+  });
+
+  await t('search: token match via note text, not just label', async () => {
+    // Old search matched label substring only; query words that appear only
+    // in an attached note must now surface the node (recall-quality pin).
+    await j('POST', '/api/node', { type: 'decision', label: 'booking queue' }, 200);
+    await j('POST', '/api/notes', { text: 'we chose serializable isolation for the booking queue', parent: 'decision:booking-queue', model: 'pin' }, 200);
+    await wait(400);
+    const { json } = await j('GET', `/api/search?q=${encodeURIComponent('chose serializable')}&limit=5`, null, 200);
+    assert.equal(json.results[0].id, 'decision:booking-queue', JSON.stringify(json.results));
+  });
+
+  await t('recall: token-mode fallback shape when embeddings are disabled', async () => {
+    // Suite runs with MEMHUB_NO_EMBED=1, so /api/recall must degrade to token
+    // ranking instead of erroring, keeping the same {id,label,type,score} shape.
+    const { json } = await j('GET', `/api/recall?q=${encodeURIComponent('chose serializable')}&limit=5`, null, 200);
+    assert.equal(json.mode, 'token');
+    assert.equal(json.results[0].id, 'decision:booking-queue', JSON.stringify(json.results));
+    assert.equal(typeof json.results[0].score, 'number');
+    const empty = await j('GET', '/api/recall?q=%20&limit=5', null, 200);
+    assert.equal(empty.json.results.length, 0);
   });
 
   await t('query hops: BFS subgraph bounded + concept-id normalization', async () => {
@@ -238,6 +259,83 @@ async function main() {
     assert.equal(Array.isArray(json.edges), true);
   });
 
+  await t('/api/graph strips embedding vectors, carries embedRev', async () => {
+    await j('POST', '/api/node', { type: 'concept', label: 'embed-shape probe' }, 200);
+    const { json } = await j('GET', '/api/graph', null, 200);
+    assert.equal(json.nodes.length > 0, true);
+    assert.equal(json.nodes.every((n) => !('embedding' in n)), true, 'embedding leaked into /api/graph');
+    assert.equal(typeof json.embedRev === 'string' || json.embedRev === 0, true, JSON.stringify(json.embedRev));
+  });
+
+  await t('/api/embeddings shape under disabled engine', async () => {
+    const st = await j('GET', '/api/embed/status', null, 200);
+    assert.equal(st.json.status, 'failed');
+    assert.equal(st.json.error, 'disabled');
+    const { json } = await j('GET', '/api/embeddings', null, 200);
+    assert.equal(json.status.status, 'failed');
+    assert.equal(json.status.error, 'disabled');
+    assert.equal(json.dim, 384);
+    assert.equal(typeof json.vectors, 'object');
+    assert.equal(Object.keys(json.vectors).length, 0, 'disabled engine must not have produced vectors');
+    for (const [id, v] of Object.entries(json.vectors)) {
+      assert.equal(Array.isArray(v), true, id + ' vector not array');
+      assert.equal(v.length, 384, id + ' vector length ' + v.length);
+      assert.equal(v.every((x) => typeof x === 'number'), true, id + ' non-numeric');
+    }
+  });
+
+  await t('embeddings: vectors stripped from graph/node/query but served by /api/embeddings', async () => {
+    const node = (await j('POST', '/api/node', { type: 'concept', label: 'seeded vector probe' }, 200)).json.node;
+    const id = node.id;
+    try {
+      // Wait for the server's debounced flush, then inject a vector atomically.
+      for (let i = 0; i < 20; i++) {
+        const disk = fs.existsSync(STORE) ? JSON.parse(fs.readFileSync(STORE, 'utf8')) : null;
+        if (disk && disk.nodes && disk.nodes[id]) break;
+        await wait(150);
+      }
+      await wait(400); // let saveNow finish so the watcher is not deferred by dirty state
+      const disk = JSON.parse(fs.readFileSync(STORE, 'utf8'));
+      assert.equal(!!disk.nodes[id], true, 'seeded node never reached disk');
+      const v = Array.from({ length: 384 }, (_, i) => (i === 0 ? 1 : 0));
+      disk.nodes[id].embedding = { model: 'test', dim: 384, v, at: Date.now(), hash: 'x', stale: false };
+      const seedTmp = STORE + '.seed.tmp';
+      fs.writeFileSync(seedTmp, JSON.stringify(disk));
+      fs.renameSync(seedTmp, STORE);
+
+      let emb = null;
+      for (let i = 0; i < 20; i++) {
+        emb = (await j('GET', '/api/embeddings', null, 200)).json;
+        if (emb.vectors && Array.isArray(emb.vectors[id]) && emb.vectors[id].length === 384) break;
+        await wait(150);
+      }
+      assert.equal(emb.dim, 384);
+      assert.equal(Array.isArray(emb.vectors[id]), true, 'seeded vector not served: ' + JSON.stringify(emb.rev));
+      assert.equal(emb.vectors[id].length, 384);
+      assert.equal(emb.vectors[id].every((x) => typeof x === 'number'), true);
+      for (const [vid, vec] of Object.entries(emb.vectors)) {
+        assert.equal(vec.length, 384, vid + ' vector length ' + vec.length);
+        assert.equal(vec.every((x) => typeof x === 'number'), true, vid + ' non-numeric');
+      }
+
+      const g = (await j('GET', '/api/graph', null, 200)).json;
+      const gn = g.nodes.find((n) => n.id === id);
+      assert.equal(gn !== undefined, true, 'seeded node missing from graph');
+      assert.equal('embedding' in gn, false, 'graph leaked embedding');
+
+      const d = (await j('GET', `/api/node/${encodeURIComponent(id)}`, null, 200)).json;
+      assert.equal(d.node.id, id);
+      assert.equal('embedding' in d.node, false, 'node detail leaked embedding');
+
+      const q = (await j('GET', `/api/query/${encodeURIComponent(id)}?hops=1`, null, 200)).json;
+      const qn = q.subgraph.nodes.find((n) => n.id === id);
+      assert.equal(qn !== undefined, true, 'seeded node missing from query subgraph');
+      assert.equal('embedding' in qn, false, 'query subgraph leaked embedding');
+    } finally {
+      await j('DELETE', `/api/node/${encodeURIComponent(id)}`, null, 200);
+    }
+  });
+
   await t('backup: file written immediately', async () => {
     const { json } = await j('POST', '/api/backup', {}, 200);
     assert.equal(json.ok, true);
@@ -269,6 +367,17 @@ async function main() {
     assert.equal(trav1.status !== 200 && trav2.status !== 200, true);
   });
 
+  await t('static: graph3d.js + vendored 3D lib served', async () => {
+    const g = await fetch(`${BASE}/graph3d.js`);
+    assert.equal(g.status, 200);
+    assert.equal(g.headers.get('content-type').includes('javascript'), true);
+    const text = await g.text();
+    assert.equal(text.includes('ForceGraph'), true);
+    const lib = await fetch(`${BASE}/vendor/3d-force-graph.min.js`);
+    assert.equal(lib.status, 200);
+    assert.equal(lib.headers.get('content-type').includes('javascript'), true);
+  });
+
   await t('unknown api path -> 404 JSON', async () => {
     const r = await j('GET', '/api/wat');
     assert.equal(r.status, 404);
@@ -276,14 +385,14 @@ async function main() {
   });
 
   /* ---------- MCP protocol ---------- */
-  await t('MCP: initialize + tools/list (9 tools)', async () => {
+  await t('MCP: initialize + tools/list (10 tools)', async () => {
     const msgs = await mcpProc([
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } } },
       { jsonrpc: '2.0', id: 2, method: 'tools/list' },
     ]);
     assert.equal(msgs[0].result.protocolVersion, '2024-11-05');
     assert.equal(msgs[0].result.serverInfo.name, 'memhub');
-    assert.equal(msgs[1].result.tools.length, 9);
+    assert.equal(msgs[1].result.tools.length, 10);
   });
 
   await t('MCP: one-shot save_note flushes to disk', async () => {
@@ -308,7 +417,21 @@ async function main() {
     assert.equal(link.source, 'decision:adopt-memhub');
     const found = JSON.parse(msgs[2].result.content[0].text);
     assert.equal(found[0].id, 'decision:adopt-memhub');
-    assert.equal(found[0].score, 100); // exact-label query
+    assert.equal(found[0].score > 1000, true, 'exact label match must outrank token accumulations'); // exact-match (+1000) on top of token scores
+  });
+
+  await t('MCP: recall returns node + notes + neighbors in one call', async () => {
+    await j('POST', '/api/notes', { text: 'recall probe: uses optimistic caching layer', parent: projA.id, model: 'recall-pin' }, 200);
+    await wait(400);
+    const msgs = await mcpProc([
+      { jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'memhub_recall', arguments: { query: 'optimistic caching recall' } } },
+    ]);
+    assert.equal(msgs[0].result && msgs[0].result.isError === undefined, true, JSON.stringify(msgs[0]).slice(0, 300));
+    const out = JSON.parse(msgs[0].result.content[0].text);
+    const entry = out.find((x) => x.node.id === projA.id);
+    assert.equal(entry !== undefined, true, 'target node missing from recall: ' + JSON.stringify(out.map((x) => x.node.id)));
+    assert.equal(entry.notes.some((n) => n.text.includes('optimistic caching')), true);
+    assert.equal(Array.isArray(entry.neighbors) && entry.neighbors.length > 0, true);
   });
 
   await t('MCP: errors (parse -32700, method -32601, tool isError)', async () => {
@@ -440,6 +563,163 @@ async function main() {
     assert.equal(Array.isArray(g.notes), true);
     assert.equal(g.notes.length > 0, true);
     assert.equal(g.notes.every((n) => n.id && typeof n.text === 'string' && typeof n.createdAt === 'string'), true);
+  });
+
+  await t('graph3d pure: cosine/mutualKnn/communities', async () => {
+    const g3 = require(path.join(__dirname, 'web', 'graph3d.js'));
+    const A = [1, 0, 0], B = [1, 0, 0], C = [0, 1, 0], D = [0, 0, 1];
+    const near = (x, y) => Math.abs(x - y) < 1e-9;
+    assert.equal(near(g3.cosine(A, A), 1), true, 'self cosine');
+    assert.equal(near(g3.cosine(A, C), 0), true, 'orthogonal cosine');
+    assert.equal(near(g3.cosine([2, 0], [2, 0]), 1), true, 'renormalizes non-unit');
+
+    const vecs = { A, B, C, D }, k = 2, minCos = 0.35;
+    const links = g3.mutualKnn(vecs, k, minCos);
+    assert.equal(links.length <= Math.floor(Object.keys(vecs).length * k / 2), true, 'at most k mutual pairs per side: ' + JSON.stringify(links));
+    const keys = links.map((l) => [l.source, l.target].sort().join('|'));
+    assert.equal(new Set(keys).size, keys.length, 'duplicate unordered pair: ' + JSON.stringify(keys));
+    assert.equal(links.every((l) => l.sim >= minCos), true, 'sim below threshold leaked: ' + JSON.stringify(links));
+    assert.equal(links.some((l) => l.source === 'A' && l.target === 'B' && near(l.sim, 1)), true, 'A-B mutual pair missing: ' + JSON.stringify(links));
+
+    const groups = g3.communities(['a', 'b', 'c'], [{ source: 'a', target: 'b' }]);
+    assert.equal(groups instanceof Map, true, 'communities returns Map');
+    assert.equal(groups.get('a'), groups.get('b'), 'linked nodes share a group');
+    assert.equal(groups.get('c'), -1, 'isolated node is -1');
+    assert.deepEqual([...g3.communities(['a', 'b', 'c'], [{ source: 'a', target: 'b' }])], [...groups], 'deterministic');
+  });
+
+  await t('layout pure: buildLinks + computeLayout deterministic, finite coords', async () => {
+    const L = require(path.join(__dirname, 'server', 'src', 'layout.js'));
+    const g3 = require(path.join(__dirname, 'web', 'graph3d.js'));
+    const A = [1, 0, 0], B = [1, 0, 0], C = [0, 1, 0], D = [0, 0, 1];
+    const nodes = { a: { id: 'a' }, b: { id: 'b' }, c: { id: 'c' }, d: { id: 'd' } };
+    const vec = { a: A, b: B, c: C, d: D };
+    const edges = [{ id: 'e1', source: 'a', target: 'b' }];
+
+    const links = L.buildLinks(nodes, vec, edges);
+    assert.equal(links[0].source === 'a' && links[0].target === 'b' && links[0].real === 1, true,
+      'real edge first, flagged real: ' + JSON.stringify(links));
+    // server kNN agrees with browser kNN on the remaining sim links
+    const browserKnn = (await Promise.resolve(g3.mutualKnn(vec, L.KNN_K, L.MIN_COS)))
+      .filter((l) => !(l.source === 'a' && l.target === 'b'));
+    const simLinks = links.filter((l) => !l.real);
+    const keyOf = (l) => [l.source, l.target].sort().join('|');
+    assert.deepEqual(simLinks.map(keyOf).sort(), browserKnn.map(keyOf).sort(), 'server vs browser mutualKnn differ');
+    assert.equal(links.every((l) => l.w > 0 && (l.real || l.sim >= L.MIN_COS)), true, 'bad weights: ' + JSON.stringify(links));
+
+    const r1 = L.computeLayout(Object.keys(nodes).sort(), links, vec);
+    const r2 = L.computeLayout(Object.keys(nodes).sort(), links, vec);
+    assert.equal(r1.hash, r2.hash, 'hash not deterministic');
+    assert.deepEqual(r1.positions, r2.positions, 'positions not deterministic');
+    for (const id of Object.keys(nodes)) {
+      const p = r1.positions[id];
+      assert.equal(Array.isArray(p) && p.length === 3 && p.every((x) => Number.isFinite(x)), true,
+        `coord for ${id} not finite: ${JSON.stringify(p)}`);
+    }
+    // d-d is orthogonal-pair (cos 0) -> no sim link; a-b identical -> pair exists
+    assert.equal(simLinks.some((l) => keyOf(l) === 'a|b'), false, 'real-edge pair duplicated by kNN');
+  });
+
+  await t('/api/layout: ready, full coverage, stable hash, rev present', async () => {
+    const first = (await j('GET', '/api/layout', null, 200)).json;
+    assert.equal(first.status, 'ready', JSON.stringify(first.status));
+    assert.equal(typeof first.hash, 'string', 'missing hash');
+    assert.equal(typeof first.rev, 'number', 'missing rev');
+    assert.equal(Array.isArray(first.links), true, 'missing links');
+    const nodes = (await j('GET', '/api/graph', null, 200)).json.nodes.map((n) => n.id);
+    for (const id of nodes) {
+      const p = first.positions[id];
+      assert.equal(Array.isArray(p) && p.length === 3 && p.every((x) => Number.isFinite(x)), true,
+        `no layout position for ${id}`);
+    }
+    // idempotent: second read unchanged while data unchanged
+    const second = (await j('GET', '/api/layout', null, 200)).json;
+    assert.equal(second.hash, first.hash, 'hash changed without data change');
+    assert.deepEqual(second.positions, first.positions, 'positions changed without data change');
+    // links reference existing nodes only
+    const set = new Set(nodes);
+    for (const l of first.links) {
+      assert.equal(set.has(l.source) && set.has(l.target), true, `link to unknown node: ${JSON.stringify(l)}`);
+    }
+  });
+
+  await t('layout persists to store.json with served hash', async () => {
+    const served = (await j('GET', '/api/layout', null, 200)).json;
+    await wait(450); // debounced save lands
+    const onDisk = JSON.parse(fs.readFileSync(STORE, 'utf8'));
+    assert.equal(onDisk.layout && typeof onDisk.layout, 'object', 'layout section missing on disk');
+    assert.equal(onDisk.layout.hash, served.hash, 'disk hash != served hash');
+    const ids = Object.keys(served.positions);
+    assert.equal(ids.length > 0, true, 'served layout has no positions');
+    assert.equal(ids.every((id) => Array.isArray(onDisk.layout.positions[id])), true, 'positions missing on disk');
+  });
+
+  await t('recall budget: truncation marker + payload inside tiny cap', async () => {
+    await j('POST', '/api/node', { type: 'concept', label: 'budget cut sentence' }, 200);
+    // ~2600 chars: way past budget 300, marker must appear with honest count
+    const filler = [];
+    for (let i = 0; i < 26; i++) filler.push('alpha bravo charlie delta echo foxtrot golf hotel india juliet zulu' + String(i).padStart(2, '0'));
+    await j('POST', '/api/notes', {
+      text: 'budget-cut-sentence ' + filler.join(' ') + '. terminal tail token.',
+      parent: 'concept:budget-cut-sentence',
+      model: 'budget-test',
+    }, 200);
+    await wait(300);
+    const msgs = await mcpProc([
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memhub_recall', arguments: { query: 'budget-cut-sentence', budget: 300 } } },
+    ]);
+    assert.equal(msgs[0]._bad, undefined, JSON.stringify(msgs[0]).slice(0, 300));
+    const body = JSON.parse(msgs[0].result.content[0].text);
+    assert.equal(body.tokens != null && typeof body.tokens === 'object', true, 'stats missing: ' + JSON.stringify(body).slice(0, 120));
+    assert.equal(body.tokens.used <= 300, true, `reported used ${body.tokens.used} > budget 300: ` + JSON.stringify(body.tokens));
+    const top = body.nodes.find((n) => n.node.id === 'concept:budget-cut-sentence');
+    assert.equal(!!top, true, 'probe node missing from payload: ' + JSON.stringify(body.nodes.map((x) => x.node.id)));
+    assert.equal(top.notes.some((n) => /\.\.\.\(\+\d+ chars\)$/.test(n.text)), true, 'top note not truncated: ' + JSON.stringify(top.notes.map((n) => n.text).join('|')).slice(0, 200));
+  });
+
+  await t('recall budget: near-duplicate notes deduped payload-wide', async () => {
+    await j('POST', '/api/node', { type: 'concept', label: 'budget dedupe' }, 200);
+    await j('POST', '/api/notes', { text: 'the layout engine stores deterministic three-dimensional coordinates for every node in the graph throughout the shared store and also writes them to disk for later reuse by any agent that asks for coordinates', parent: 'concept:budget-dedupe', model: 'budget-test' }, 200);
+    await j('POST', '/api/notes', { text: 'the layout engine stores deterministic three-dimensional coordinates for every node in the graph throughout the shared store and also writes them to disk for later reuse by whichever agent requests coordinates again', parent: 'concept:budget-dedupe', model: 'budget-test' }, 200);
+    await wait(300);
+    const msgs = await mcpProc([
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memhub_recall', arguments: { query: 'budget-dedupe', budget: 1800 } } },
+    ]);
+    assert.equal(msgs[0]._bad, undefined, JSON.stringify(msgs[0]).slice(0, 300));
+    const body = JSON.parse(msgs[0].result.content[0].text);
+    assert.equal(body.tokens != null && typeof body.tokens === 'object', true, 'stats missing: ' + JSON.stringify(body).slice(0, 200));
+    assert.equal(body.tokens.dupesDropped >= 1, true, 'dedupe dropped nothing: ' + JSON.stringify(body.tokens));
+    const top = body.nodes.find((n) => n.node.id === 'concept:budget-dedupe');
+    assert.equal(!!top, true, 'dedupe probe node missing');
+    assert.equal(top.notes.length, 1, `near-dupes both survived: ${top.notes.length} notes`);
+  });
+
+  await t('recall without budget: legacy shape unchanged', async () => {
+    const msgs = await mcpProc([
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memhub_recall', arguments: { query: 'budget-dedupe' } } },
+    ]);
+    const body = JSON.parse(msgs[0].result.content[0].text);
+    assert.equal(Array.isArray(body), true, 'legacy recall returns array');
+    assert.equal(body[0].node.meta !== undefined, true, 'legacy payload keeps meta');
+    assert.equal(!!body[0].node.updatedAt, true, 'legacy payload keeps updatedAt');
+    assert.equal(Array.isArray(body[0].neighbors), true, 'legacy neighbors array');
+  });
+
+  await t('/api/node origin: models + sessions provenance', async () => {
+    await j('POST', '/api/sessions', { model: 'claude-opus-4-6', agent: 'claude-code' }, 200);
+    const nid = 'concept:origin-probe';
+    await j('POST', '/api/node', { type: 'concept', label: 'origin probe' }, 200);
+    await j('POST', '/api/notes', { text: 'origin probe note one', parent: nid, model: 'claude-opus-4-6', tags: ['probe'] }, 200);
+    await j('POST', '/api/notes', { text: 'origin probe note two', parent: nid, model: 'opencode-glm-5.3-flash-free' }, 200);
+    const detail = (await j('GET', `/api/node/${encodeURIComponent(nid)}`, null, 200)).json;
+    const models = (detail.origin.models || []).map((m) => m.model);
+    assert.equal(models.includes('claude-opus-4-6'), true, JSON.stringify(detail.origin));
+    assert.equal(models.includes('opencode-glm-5.3-flash-free'), true, JSON.stringify(detail.origin));
+    assert.deepEqual(detail.origin.models.map((m) => m.notes), [1, 1], 'note counts wrong: ' + JSON.stringify(detail.origin.models));
+    // no-provenance node: empty but present
+    await j('POST', '/api/node', { type: 'concept', label: 'origin empty probe' }, 200);
+    const bare = (await j('GET', `/api/node/${encodeURIComponent('concept:origin-empty-probe')}`, null, 200)).json;
+    assert.deepEqual(bare.origin, { models: [], sessions: [] }, JSON.stringify(bare.origin));
   });
 
   await t('MCP: oversized reply (1MB note) parses fully, no truncation', async () => {

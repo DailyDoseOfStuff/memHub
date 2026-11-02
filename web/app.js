@@ -1,6 +1,18 @@
-/* MemHub app controller: graph, sidebar, search, modals, toasts. */
+/* memHub app controller: graph, sidebar, search, modals, toasts. */
 (function () {
   'use strict';
+
+  // Crash surfacing: an uncaught init error otherwise looks like "the page is dead".
+  window.addEventListener('error', (e) => {
+    let b = document.getElementById('err-banner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'err-banner';
+      b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f87171;color:#0b0e14;padding:6px 10px;font-size:12px;font-family:ui-monospace,monospace';
+      (document.body || document.documentElement).appendChild(b);
+    }
+    b.textContent = 'JS error: ' + (e.message || e.error) + ' @ ' + (e.filename || '?') + ':' + (e.lineno || '?');
+  });
 
   const TYPE_COLORS = {
     project: '#a78bfa',
@@ -72,6 +84,21 @@
       selectedNodeId = null;
       renderSidebar();
     }
+  }
+
+  /* ---------- server layout (deterministic 3D seed + union graph) ---------- */
+  let lastLayoutHash = undefined; // undefined = never fetched
+
+  async function loadLayout() {
+    try {
+      const res = await fetch('/api/layout');
+      if (!res.ok) return;
+      const data = await res.json();
+      const hash = data.hash || null;
+      if (hash === lastLayoutHash) return;
+      lastLayoutHash = hash;
+      if (data.status === 'ready') forceGraph.setServerLayout(data);
+    } catch {}
   }
 
   function visibleTypes() {
@@ -171,6 +198,16 @@
         </div>`)
       .join('') || '<p style="color:var(--muted);font-size:12px">No notes attached.</p>';
     const savedModel = localStorage.getItem('memhub-model') || '';
+    const origin = detail.origin || {};
+    const originChips = (origin.models || [])
+      .map((m) => `<span class="chip origin">${esc(m.model)}<b>${m.notes}</b></span>`)
+      .join('');
+    const originSessions = (origin.sessions || [])
+      .filter((s) => s.notes > 0)
+      .map((s) => `<div class="origin-session"><span class="chip">${esc(s.agent || s.model || s.id)}</span><span class="origin-meta">${relDate(s.startedAt || s.id)} · ${s.notes} note${s.notes === 1 ? '' : 's'}</span></div>`)
+      .join('');
+    const originSection = (originChips || originSessions)
+      ? `<section><h3>Origin</h3>${originChips ? `<div class="origin-models">${originChips}</div>` : ''}${originSessions || ''}</section>` : '';
     body.innerHTML = `
       <section>
         <h2>${esc(node.label)}</h2>
@@ -178,6 +215,7 @@
         <div class="id">${esc(node.id)}</div>
         <div style="color:var(--muted);font-size:11px">updated ${relDate(node.updatedAt)}</div>
       </section>
+      ${originSection}
       ${metaRows ? `<section><h3>Meta</h3><table class="meta-table">${metaRows}</table></section>` : ''}
       <section><h3>Connections (${(neighbors || []).length})</h3><div class="nb-list">${nbRows}</div></section>
       <section>
@@ -328,7 +366,7 @@
 
   /* ---------- init ---------- */
   function init() {
-    forceGraph = new window.ForceGraph($('graph-svg'), {
+    forceGraph = new window.ForceGraph($('graph-3d'), {
       onSelect: (node) => selectNode(node ? node.id : null),
       onFocus: async (node) => {
         const r = await api(`/api/query/${encodeURIComponent(node.id)}?hops=2`);
@@ -346,7 +384,8 @@
       if (e.key === 'Escape') { e.target.value = ''; $('search-results').classList.add('hidden'); }
     });
     document.addEventListener('click', (e) => {
-      if (!$('search-wrap').contains(e.target)) $('search-results').classList.add('hidden');
+      const sw = $('search-wrap');
+      if (!sw || !sw.contains(e.target)) $('search-results').classList.add('hidden');
     });
 
     $('add-node-btn').addEventListener('click', modalAddNode);
@@ -379,6 +418,8 @@
 
     pollHealth();
     setInterval(pollHealth, 15000);
+    loadLayout();
+    setInterval(loadLayout, 30000); // ready layout replaces the random seed; hash change = fresh map
     loadGraph().then(() => {
       renderRecents(); // label the persisted ids now that graphData is loaded
       const hid = location.hash.slice(1);
@@ -391,7 +432,7 @@
         const id = selectedNodeId;
         if (!id) return;
         const sidebar = $('sidebar');
-        if (sidebar.classList.contains('hidden')) return;    // user closed it: leave closed
+        if (!sidebar.classList.contains('open')) return; // panel closed: leave closed
         if (sidebar.contains(document.activeElement)) return; // any input focused: don't wipe typing
         const ta = $('note-text');
         if (ta && ta.value.trim()) return;                    // typed but blurred: same
@@ -402,10 +443,6 @@
         renderSidebar(detail);
       } catch {}
     }, 5000);
-    loadGraph().then(() => {
-      const hid = location.hash.slice(1);
-      if (hid) selectNode(decodeURIComponent(hid));
-    });
   }
 
   async function pollHealth() {

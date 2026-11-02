@@ -8,7 +8,7 @@ const path = require('path');
 const PORT = 4789;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'memhub-flake-'));
-const ENV = { ...process.env, MEMHUB_PORT: String(PORT), MEMHUB_DATA: DATA };
+const ENV = { ...process.env, MEMHUB_PORT: String(PORT), MEMHUB_DATA: DATA, MEMHUB_NO_EMBED: '1' };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function mj(method, p, body) {

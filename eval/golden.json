@@ -1,0 +1,18 @@
+[
+  { "q": "the person who owns this workspace", "expect": "person:allen" },
+  { "q": "we deliberately install no npm packages", "expect": "decision:zero-npm-dependencies" },
+  { "q": "two processes writing the same json file without corruption", "expect": "concept:cross-model-coherence" },
+  { "q": "pictures of the knowledge network you can explore", "expect": "concept:graph-visualization" },
+  { "q": "works with Claude Code and other mcp editors", "expect": "concept:claude-code-interoperability" },
+  { "q": "where does memory survive between runs", "expect": "concept:memory-persistence" },
+  { "q": "flashcard app the user nicknames banana", "expect": "project:plum (lumen flashcard app)" },
+  { "q": "discord bot that controls coding sessions", "expect": "project:opencode-discord-bot" },
+  { "q": "browser controller for the ui", "expect": "file:app.js" },
+  { "q": "data layer with atomic write and debounce", "expect": "file:store.js" },
+  { "q": "bfs neighborhood search and stats helpers", "expect": "file:graph.js" },
+  { "q": "stdio bridge that exposes tools", "expect": "file:mcp.js" },
+  { "q": "test rig sending tasks to models", "expect": "project:ai-harness" },
+  { "q": "spring animation moving nodes", "expect": "concept:animated-force-graph" },
+  { "q": "multi agent experiment workspace", "expect": "project:experiments" },
+  { "q": "the memory hub project itself", "expect": "project:memhub" }
+]

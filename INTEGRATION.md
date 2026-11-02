@@ -1,4 +1,4 @@
-﻿# memHub Integration â€” Plug Into AI Tools
+﻿# memHub Integration - Plug Into AI Tools
 
 ## Overview
 
@@ -34,6 +34,7 @@ memHub gives any AI model one shared, persistent memory: a knowledge graph of pr
 
 Tools exposed over MCP (each returns the same JSON as its REST counterpart):
 
+- `memhub_recall` `{ query, limit? }` - one call at session start: top matched nodes, each with attached notes and neighbor labels
 - `memHub_save_note` `{ text, parent?, tags?, model?, session? }`
 - `memHub_find_nodes` `{ query, limit? }`
 - `memHub_get_node` `{ id }`
@@ -129,10 +130,10 @@ Then open `http://127.0.0.1:4777`. The UI reads and writes the same store that e
 
 ## Agent usage pattern (recommended)
 
-1. Session start â€” run `memHub_stats` and `memHub_find_nodes('project name')` to see what is already known before doing anything.
-2. Discovered facts â€” save them with `memHub_save_note` (pass your model name as `model`; set `parent` to attach the note to a node), then `memHub_link_nodes` to connect the concepts involved.
-3. Decisions â€” save a note with tags `["decision"]` and link it to the project node.
-4. Before big changes â€” run `memHub_neighborhood` on the project node (2 hops) to check what is connected to what.
+1. Session start - call `memhub_recall` with the project/task words: one response carries matched nodes, their notes, and neighbour labels.
+2. Discovered facts - save them with `memHub_save_note` (pass your model name as `model`; set `parent` to attach the note to a node), then `memHub_link_nodes` to connect the concepts involved.
+3. Decisions - save a note with tags `["decision"]` and link it to the project node.
+4. Before big changes - run `memHub_neighborhood` on the project node (2 hops) to check what is connected to what.
 
 ## Notes
 

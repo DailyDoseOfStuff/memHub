@@ -1,0 +1,29 @@
+# memHub in its own container.
+# - Web UI + REST API serve from here on host 127.0.0.1:4777 (loopback only).
+# - server/data is BIND-MOUNTED from the host, so agent-side MCP (mcp.js runs
+#   on the host) and the container share one store.json - same memory.
+# - The webpack of no-cache: the model cache lives in server/data/llm-cache,
+#   which is part of that mount - no extra volume needed.
+#
+# Start:      docker compose up -d
+# Logs:       docker compose logs -f memhub
+# Stop:       docker compose down
+# Fresh data: (stop first) move server/data aside, empty dir, up
+name: memhub
+
+services:
+  memhub:
+    build: .
+    image: memhub:latest
+    container_name: memhub-server
+    init: true
+    ports:
+      - "127.0.0.1:4777:4777"  # loopback on the host: never port-forward (no auth)
+    volumes:
+      - ./server/data:/data
+    environment:
+      # Embeddings on by default; set 1 to run vector-less (UI falls back).
+      MEMHUB_NO_EMBED: "0"
+      # Surface crash/live traces in docker logs when wanted
+      MEMHUB_DEBUG: ""
+    restart: unless-stopped

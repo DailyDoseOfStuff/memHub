@@ -1,0 +1,21 @@
+{
+  "name": "memhub-marketplace",
+  "description": "Cross-model memory and knowledge-graph hub for AI coding agents: one shared brain with a 3D context universe.",
+  "owner": {
+    "name": "DailyDoseOfStuff"
+  },
+  "plugins": [
+    {
+      "name": "memhub",
+      "source": "./",
+      "description": "Shared memory graph: MCP tools (recall/save/find/link) + 3D context universe web UI. All agents, one brain.",
+      "version": "1.1.0",
+      "author": {
+        "name": "DailyDoseOfStuff"
+      },
+      "homepage": "https://github.com/DailyDoseOfStuff/memHub",
+      "category": "memory",
+      "tags": ["mcp", "memory", "knowledge-graph", "3d"]
+    }
+  ]
+}

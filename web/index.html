@@ -16,7 +16,7 @@
       <span>memHub</span>
       <span id="conn-dot" class="dot off" title="checking..."></span>
     </div>
-    <div class="search-wrap">
+    <div class="search-wrap" id="search-wrap">
       <input id="search-input" type="text" placeholder="Search nodes... ( / )" autocomplete="off" spellcheck="false" />
       <div id="search-results" class="dropdown hidden"></div>
     </div>
@@ -31,8 +31,7 @@
 
   <main id="main">
     <div id="graph-pane">
-      <svg id="graph-svg"><g id="graph-viewport"></g></svg>
-      <div id="graph-legend" class="legend"></div>
+      <div id="graph-3d"></div>
       <div id="graph-empty" class="empty hidden">Empty graph â€” connect your first model agent via MCP, or add a node.</div>
       <div id="recents" class="hidden"></div>
       <button id="sidebar-toggle" class="btn subtle" title="Pin panel open">&#9776;</button>
@@ -46,7 +45,8 @@
   <div id="modal-overlay" class="modal-overlay hidden"></div>
   <div id="toasts"></div>
 
-  <script src="/graph.js"></script>
+  <script src="/vendor/3d-force-graph.min.js"></script>
+  <script src="/graph3d.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

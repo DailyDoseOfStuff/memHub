@@ -2,6 +2,7 @@
 
 const store = require('./store');
 const graph = require('./graph');
+const embedModule = require('./embed');
 
 const BODY_LIMIT = 2 * 1024 * 1024;
 
@@ -43,6 +44,26 @@ function readBody(req) {
 function fail(err) {
   if (err && typeof err === 'object' && 'code' in err && 'error' in err) return err;
   return { code: 500, error: err && err.message ? err.message : String(err) };
+}
+
+// Vector change token for the client. Vectors stay out of /api/graph (payload
+// size); the client refetches /api/embeddings only when this token moves.
+function embedRev(s) {
+  let count = 0;
+  let sumAt = 0;
+  for (const n of Object.values(s.nodes)) {
+    const e = n.embedding;
+    if (!e || !Array.isArray(e.v) || !e.v.length) continue;
+    count++;
+    sumAt += Number(e.at) || 0;
+  }
+  return count ? `${count}:${sumAt}` : 0;
+}
+
+function publicNode(n) {
+  const copy = { ...n };
+  delete copy.embedding;
+  return copy;
 }
 
 // Path is decoded exactly once here. id segments must NOT be decoded again
@@ -97,12 +118,56 @@ async function handle(req, res, url) {
     // ---- full graph ----
     if (method === 'GET' && path === '/api/graph') {
       const s = store.getStore();
-      return respond(res, 200, { nodes: Object.values(s.nodes), edges: s.edges, notes: Object.values(s.notes) });
+      return respond(res, 200, {
+        nodes: Object.values(s.nodes).map(publicNode),
+        edges: s.edges,
+        notes: Object.values(s.notes),
+        embedRev: embedRev(s),
+      });
+    }
+
+    // ---- cached vectors (fetched separately from the graph) ----
+    if (method === 'GET' && path === '/api/embeddings') {
+      const s = store.getStore();
+      const vectors = {};
+      for (const n of Object.values(s.nodes)) {
+        if (n.embedding && Array.isArray(n.embedding.v) && n.embedding.v.length) {
+          vectors[n.id] = n.embedding.v;
+        }
+      }
+      // Repeats converge: missing/stale vectors get queued while the engine is up.
+      if (embedModule.status().status === 'ready') {
+        for (const n of Object.values(s.nodes)) {
+          if (store.needsEmbedding(n.id)) store.refreshEmbedding(n.id); // fire-and-forget, deduped
+        }
+      }
+      return respond(res, 200, {
+        status: embedModule.status(),
+        rev: embedRev(s),
+        dim: embedModule.EMBED_DIM,
+        vectors,
+      });
     }
 
     // ---- stats ----
     if (method === 'GET' && path === '/api/stats') {
       return respond(res, 200, graph.stats());
+    }
+
+    // ---- deterministic 3D layout (positions + union graph) ----
+    if (method === 'GET' && path === '/api/layout') {
+      const s = store.getStore();
+      const cur = store.ensureLayout();
+      const status = cur && cur.status === 'ready'
+        ? { status: 'ready', hash: cur.hash, positions: cur.positions, links: cur.links }
+        : { status: 'stale', hash: (s.layout && s.layout.hash) || null,
+            positions: (s.layout && s.layout.positions) || {}, links: (s.layout && s.layout.links) || [] };
+      return respond(res, 200, { rev: embedRev(s), ...status });
+    }
+
+    // ---- embedding engine status (UI decides whether to show vector fallbacks) ----
+    if (method === 'GET' && path === '/api/embed/status') {
+      return respond(res, 200, embedModule.status());
     }
 
     // ---- node: get ----
@@ -112,17 +177,22 @@ async function handle(req, res, url) {
       if (!id || !store.getStore().nodes[id]) return respond(res, 404, { error: 'node not found' });
       const s = store.getStore();
       const node = s.nodes[id];
-      const edges = s.edges.filter((e) => e.source === id || e.target === id);
-      const nbMap = graph.neighbors(id, 1);
+      const edges = store.edgesOf(id);
       const nids = new Set();
       for (const e of edges) {
         nids.add(e.source);
         nids.add(e.target);
       }
       nids.delete(id);
-      const neighbors = [...nids].map((n) => s.nodes[n]).filter(Boolean);
+      const neighbors = [...nids].map((n) => s.nodes[n]).filter(Boolean).map(publicNode);
       const notes = Object.values(s.notes).filter((n) => n.parent === id);
-      return respond(res, 200, { node, edges, neighbors, notes });
+      return respond(res, 200, {
+        node: publicNode(node),
+        edges,
+        neighbors,
+        notes,
+        origin: store.nodeOrigin(id),
+      });
     }
 
     // ---- node: create/upsert ----
@@ -131,7 +201,7 @@ async function handle(req, res, url) {
       if (bad) return respond(res, bad.code, bad);
       const node = store.upsertNode(body.type, body.label, body.meta);
       store.saveDebounced();
-      return respond(res, 200, { node });
+      return respond(res, 200, { node: publicNode(node) });
     }
 
     // ---- node: delete ----
@@ -208,13 +278,27 @@ async function handle(req, res, url) {
       return respond(res, 200, { results });
     }
 
+    // ---- hybrid recall (token + semantic; token-only when engine is off) ----
+    if (method === 'GET' && path === '/api/recall') {
+      const q = url.searchParams.get('q') || '';
+      const limit = parseInt(url.searchParams.get('limit'), 10) || 10;
+      const budgetParam = parseInt(url.searchParams.get('budget'), 10);
+      if (Number.isFinite(budgetParam) && budgetParam > 0) {
+        const ranked = await graph.recall(q, limit, embedModule.embed);
+        return respond(res, 200, { mode: ranked.mode, ranking: ranked.results, ...graph.recallContext(ranked.results, { budget: budgetParam }) });
+      }
+      const out = await graph.recall(q, limit, embedModule.embed);
+      return respond(res, 200, out);
+    }
+
     // ---- query / neighborhood ----
     m = path.match(/^\/api\/query\/(.+)$/);
     if (m && method === 'GET') {
       const id = store.resolveId(m[1]);
       const hops = parseInt(url.searchParams.get('hops'), 10);
       const r = graph.neighbors(id, Number.isFinite(hops) && hops >= 1 ? hops : 2);
-      return respond(res, 200, { center: r.center, subgraph: r.subgraph });
+      const subgraph = { ...r.subgraph, nodes: r.subgraph.nodes.map(publicNode) };
+      return respond(res, 200, { center: r.center, subgraph });
     }
 
     // ---- backup ----

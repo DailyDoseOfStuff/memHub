@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "memhub": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/src/mcp.js"],
+      "env": {}
+    }
+  }
+}
