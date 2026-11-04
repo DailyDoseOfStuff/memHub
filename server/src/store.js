@@ -69,8 +69,40 @@ function ensureDefaults(s) {
   if (!s.layout || typeof s.layout !== 'object') s.layout = { hash: null, positions: {}, links: [] };
   if (!s.layout.positions || typeof s.layout.positions !== 'object') s.layout.positions = {};
   if (!Array.isArray(s.layout.links)) s.layout.links = [];
+  if (!s.tokens || typeof s.tokens !== 'object') s.tokens = { all: { calls: 0, used: 0, saved: 0 }, sessions: {} };
+  if (!s.tokens.all || typeof s.tokens.all !== 'object') s.tokens.all = { calls: 0, used: 0, saved: 0 };
+  if (!s.tokens.all.calls) s.tokens.all.calls = 0;
+  if (!s.tokens.all.used) s.tokens.all.used = 0;
+  if (!s.tokens.all.saved) s.tokens.all.saved = 0;
+  if (!s.tokens.sessions || typeof s.tokens.sessions !== 'object') s.tokens.sessions = {};
   s.version = 1;
   return s;
+}
+
+// Token-savings ledger: budgeted recall calls record what the un-budgeted
+// payload would have cost vs what actually shipped. `session` groups the bar
+// per agent session (HTTP ?session= / MCP `session` arg); null rolls up under
+// the "default" session. Characters-based estimates, same CHAR_TOKEN as graph.
+function recordTokens(session, used, saved) {
+  if (!Number.isFinite(used) || used < 0) used = 0;
+  if (!Number.isFinite(saved) || saved < 0) saved = 0;
+  const key = (typeof session === 'string' && session.trim()) ? session.trim().slice(0, 80) : 'default';
+  ensureDefaults(store);
+  store.tokens.all.calls += 1;
+  store.tokens.all.used += used;
+  store.tokens.all.saved += saved;
+  const sess = store.tokens.sessions[key] || (store.tokens.sessions[key] = { calls: 0, used: 0, saved: 0, lastAt: null });
+  sess.calls += 1;
+  sess.used += used;
+  sess.saved += saved;
+  sess.lastAt = nowIso();
+  schedDirtySave();
+  return sess;
+}
+
+function tokenUsage() {
+  ensureDefaults(store);
+  return store.tokens;
 }
 
 // --- multi-process coherence: HTTP server + MCP processes share one store.json.
@@ -567,6 +599,8 @@ module.exports = {
   setEmbedEngine,
   load,
   getStore,
+  recordTokens,
+  tokenUsage,
   saveDebounced,
   saveNow,
   flushIfDirty,

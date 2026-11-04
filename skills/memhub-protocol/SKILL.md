@@ -12,10 +12,10 @@ memHub is the user's shared brain. Claude Code, opencode, Codex, Cursor, and any
 Before assuming anything about project state, recall:
 
 ```
-memhub_recall { query: "<project name + topic words>", budget: 1500 }
+memhub_recall { query: "<project name + topic words>", budget: 1500, session: "<short session id>" }
 ```
 
-Budget keeps the reply inside a token allowance (rank-ordered fill, near-duplicate notes deduped, truncation marked `...(+N chars)`). Omit `budget` for the full payload when the context window is roomy.
+Budget keeps the reply inside a token allowance (rank-ordered fill, near-duplicate notes deduped, truncation marked `...(+N chars)`). Omit `budget` for the full payload when the context window is roomy. The `session` id feeds the token-savings bar (`GET /api/tokens`, shown in the web UI) — pick something stable like the task name.
 
 If the project is not yet in the graph, offer:
 

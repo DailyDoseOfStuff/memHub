@@ -425,6 +425,9 @@
       const hid = location.hash.slice(1);
       if (hid) selectNode(decodeURIComponent(hid));
     });
+    // token-savings bar: server ledger populated by budgeted recall calls
+    pollTokens();
+    setInterval(pollTokens, 5000);
     setInterval(async () => {
       if (document.hidden) return;
       try {
@@ -454,6 +457,52 @@
       $('conn-dot').className = 'dot off';
       $('conn-dot').title = 'offline';
     }
+  }
+
+  // --- token savings bar ---
+  // Session key rides in sessionStorage so each browser tab is its own bar
+  // bucket; agent sessions (MCP/HTTP recall `session`) form their own groups.
+  function sessionKey() {
+    let k = null;
+    try {
+      k = sessionStorage.getItem('memhub-session');
+      if (!k) {
+        k = 'web:' + Math.random().toString(36).slice(2, 10);
+        sessionStorage.setItem('memhub-session', k);
+      }
+    } catch { k = 'web:ephemeral'; }
+    return k;
+  }
+
+  function fmtTok(n) {
+    if (!Number.isFinite(n) || n <= 0) return '0';
+    if (n < 1000) return String(Math.round(n));
+    if (n < 1000000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+    return (n / 1000000).toFixed(2).replace(/\.?0+$/, '') + 'M';
+  }
+
+  async function pollTokens() {
+    try {
+      const r = await fetch('/api/tokens');
+      if (!r.ok) return;
+      const t = await r.json();
+      const key = sessionKey();
+      const mine = (t.sessions && t.sessions[key]) || { calls: 0, used: 0, saved: 0 };
+      const all = (t.all && typeof t.all === 'object' && t.all.calls != null) ? t.all : { calls: 0, used: 0, saved: 0 };
+      const sessions = Object.keys((t && t.sessions) || {}).length - (mine.calls ? 1 : 0);
+      const pct = (mine.saved + mine.used) > 0 ? Math.round((mine.saved / (mine.saved + mine.used)) * 100) : 0;
+      $('token-bar-fill').style.width = pct + '%';
+      const label = fmtTok(mine.saved) + '/' + fmtTok(mine.used + mine.saved) + ' tok saved';
+      $('token-bar-label').textContent = label;
+      const tips = Object.entries(t.sessions || {})
+        .sort((a, b) => b[1].saved - a[1].saved)
+        .slice(0, 5)
+        .map(([k, v]) => `${k}: ${fmtTok(v.saved)} saved / ${fmtTok(v.used)} spent (${v.calls} recalls)`);
+      $('token-bar').title =
+        `memHub token ledger (${all.calls} budgeted recalls, ${fmtTok(all.saved)} tokens saved overall)\n` +
+        (tips.length ? tips.join('\n') : 'no budgeted recall calls yet');
+      $('token-bar-label').dataset.sessions = String(sessions);
+    } catch { /* server down: bar keeps last value */ }
   }
 
   document.addEventListener('DOMContentLoaded', init);

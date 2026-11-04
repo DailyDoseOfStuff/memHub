@@ -102,6 +102,42 @@ input, textarea, select { font: inherit; color: inherit; }
 
 .actions { margin-left: auto; display: flex; gap: 8px; }
 
+/* ---------- token savings bar ---------- */
+.token-bar {
+  position: relative;
+  margin-left: 10px;
+  min-width: 150px;
+  max-width: 220px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel2);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+.token-bar:hover { border-color: var(--accent); }
+#token-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: linear-gradient(90deg, rgba(46, 204, 113, 0.25), rgba(46, 204, 113, 0.45));
+  transition: width 0.6s ease;
+  pointer-events: none;
+}
+#token-bar-label {
+  position: relative;
+  z-index: 1;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: var(--text-dim, #9aa4b2);
+}
+#token-bar-label[data-sessions]::after {
+  content: ' (' attr(data-sessions) ')';
+}
+
 /* ---------- buttons ---------- */
 .btn {
   padding: 6px 12px;

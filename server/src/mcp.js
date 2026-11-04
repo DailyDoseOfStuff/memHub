@@ -16,6 +16,7 @@ const TOOLS = [
         query: { type: 'string', description: 'What to remember. Plain words; order does not matter.' },
         limit: { type: 'number', description: 'Max nodes returned (default 5, max 20).' },
         budget: { type: 'number', description: 'Optional approximate token cap for the returned context (200-100000). Rank-ordered fill: top hit kept whole, near-duplicate notes deduped, meta stripped, word-boundary truncation with char markers. Use to keep the reply inside a small context allowance.' },
+        session: { type: 'string', description: 'Optional session id so the token-savings bar (GET /api/tokens, web UI) groups this call under your session.' },
       },
       required: ['query'],
     },
@@ -156,8 +157,9 @@ const RECALL_NOTE_CAP = 4000;
 
 function recall(args) {
   const budget = args.budget != null && Number(args.budget) > 0 ? Math.floor(Number(args.budget)) : null;
+  const session = typeof args.session === 'string' && args.session.trim() ? args.session.trim() : 'mcp';
   return recallOrder(args).then((hits) => {
-    if (budget) return graph.recallContext(hits, { budget });
+    if (budget) return graph.recallContext(hits, { budget, session });
     // legacy fat payload (full schema contract; RECALL_NOTE_CAP applied)
     const s = store.getStore();
     return hits.map((hit) => {

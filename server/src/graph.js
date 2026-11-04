@@ -294,6 +294,13 @@ function recallContext(hits, opts) {
   }
 
   const budget = Math.max(MIN_BUDGET, Math.min(MAX_BUDGET, budgetRaw));
+  // Full-fat cost of the same hits (what a non-budgeted recall would ship) —
+  // the denominator of the savings bar. Same estTokens basis as stats.used.
+  let fullCost = 0;
+  for (const hit of hits || []) {
+    const n = s.nodes[hit && hit.id];
+    if (n) fullCost += estTokens(JSON.stringify(fullNodeBlock(s, hit.id, n)));
+  }
   const seenWordSets = [];
   const seenLabels = new Set();
   let first = true;
@@ -360,6 +367,10 @@ function recallContext(hits, opts) {
     }
     first = false;
   }
+  stats.full = fullCost;
+  stats.saved = Math.max(0, fullCost - stats.used);
+  stats.savedPct = fullCost > 0 ? Math.round((stats.saved / fullCost) * 100) : 0;
+  store.recordTokens(opts.session, stats.used, stats.saved);
   return { nodes: out, tokens: stats };
 }
 

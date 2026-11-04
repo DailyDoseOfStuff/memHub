@@ -154,6 +154,12 @@ async function handle(req, res, url) {
       return respond(res, 200, graph.stats());
     }
 
+    // ---- token savings ledger (bar in the UI; per-session rollups) ----
+    if (method === 'GET' && path === '/api/tokens') {
+      const t = store.tokenUsage();
+      return respond(res, 200, { all: t.all, sessions: t.sessions });
+    }
+
     // ---- deterministic 3D layout (positions + union graph) ----
     if (method === 'GET' && path === '/api/layout') {
       const s = store.getStore();
@@ -285,7 +291,8 @@ async function handle(req, res, url) {
       const budgetParam = parseInt(url.searchParams.get('budget'), 10);
       if (Number.isFinite(budgetParam) && budgetParam > 0) {
         const ranked = await graph.recall(q, limit, embedModule.embed);
-        return respond(res, 200, { mode: ranked.mode, ranking: ranked.results, ...graph.recallContext(ranked.results, { budget: budgetParam }) });
+        const session = url.searchParams.get('session');
+        return respond(res, 200, { mode: ranked.mode, ranking: ranked.results, ...graph.recallContext(ranked.results, { budget: budgetParam, session }) });
       }
       const out = await graph.recall(q, limit, embedModule.embed);
       return respond(res, 200, out);
