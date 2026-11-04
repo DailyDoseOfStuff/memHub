@@ -77,8 +77,8 @@ if (-not $SkipCursor) {
   JsonReplace $f { param($json)
     if (-not $json.mcpServers) { $json | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([PSCustomObject]@{}) }
     if (-not $json.mcpServers.memhub) { $json.mcpServers | Add-Member -NotePropertyName memhub -NotePropertyValue ([PSCustomObject]@{}) }
-    $json.mcpServers.memhub.command = 'node'
-    $json.mcpServers.memhub.args = @($Mcp)
+    $json.mcpServers.memhub | Add-Member -NotePropertyName command -NotePropertyValue 'node' -Force
+    $json.mcpServers.memhub | Add-Member -NotePropertyName args -NotePropertyValue @($Mcp) -Force
   }
 }
 
@@ -89,11 +89,11 @@ if (-not $SkipOpCode) {
   JsonReplace $f { param($json)
     if (-not $json.mcp) { $json | Add-Member -NotePropertyName mcp -NotePropertyValue ([PSCustomObject]@{}) }
     if (-not $json.mcp.memhub) { $json.mcp | Add-Member -NotePropertyName memhub -NotePropertyValue ([PSCustomObject]@{}) }
-    $json.mcp.memhub.type = 'local'
-    $json.mcp.memhub.enabled = $true
+    $json.mcp.memhub | Add-Member -NotePropertyName type -NotePropertyValue 'local' -Force
+    $json.mcp.memhub | Add-Member -NotePropertyName enabled -NotePropertyValue $true -Force
     if (-not $json.mcp.memhub.command) { $json.mcp.memhub | Add-Member -NotePropertyName command -NotePropertyValue ([PSCustomObject]@{}) }
-    $json.mcp.memhub.command.command = 'node'
-    $json.mcp.memhub.command.args = @($Mcp)
+    $json.mcp.memhub.command | Add-Member -NotePropertyName command -NotePropertyValue 'node' -Force
+    $json.mcp.memhub.command | Add-Member -NotePropertyName args -NotePropertyValue @($Mcp) -Force
   }
 }
 
